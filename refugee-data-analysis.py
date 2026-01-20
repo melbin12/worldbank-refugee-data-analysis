@@ -479,3 +479,275 @@ conflict_1990_2020 = conflict[
 ]
 conflict_mean = conflict_1990_2020.groupby('country')['conflict_count'].mean().reset_index()
 conflict_mean.columns = ['Country', 'mean_conflicts']
+
+# Merge datasets
+corr_data = means.merge(conflict_mean, on='Country', how='inner')
+corr_data = corr_data[(corr_data['mean_refugees'] > 0) & (corr_data['mean_conflicts'] > 0)]
+# Create scatter plot
+plt.figure(figsize=(10, 8))
+plt.scatter(corr_data['mean_conflicts'], corr_data['mean_refugees'], alpha=0.6, s=60)
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set figure size for better readability
+plt.figure(figsize=(10, 8))
+
+# Calculate correlation between mean conflicts and mean refugees
+corr = corr_data[['mean_conflicts', 'mean_refugees']].corr()
+
+# Create heatmap
+sns.heatmap(
+    corr, 
+    annot=True,               # Show correlation values
+    fmt='.3f',                # 3 decimal places
+    cmap='YlGnBu',            # Attractive gradient color
+    square=True,              # Square cells
+    cbar_kws={'shrink': 0.8} # Shrink colorbar slightly for aesthetics
+)
+
+# Add title
+plt.title('Mean Refugee Population vs Mean Conflicts (1990-2020)\nCorrelation', fontsize=14)
+plt.tight_layout()            # Adjust layout to prevent clipping
+plt.show()
+
+import pandas as pd
+import numpy as np
+import re
+from textblob import TextBlob
+import matplotlib.pyplot as plt
+import seaborn as sns
+# Load the Twitter dataset
+df = pd.read_csv('tweets.csv') 
+
+
+# Filter for verified users with at least 100 followers and available locations
+tweet_df = df[
+    (df['user_verified'] == True) & 
+    (df['user_followers'] >= 100) & 
+    (df['user_location'].notna()) & 
+    (df['user_location'] != '')
+].copy()
+# Randomly sample 500 tweets
+if len(tweet_df) >= 500:
+    tweet_df = tweet_df.sample(n=500, random_state=42)
+else:
+    new_df = tweet_df.copy()
+    print(f"Only {len(filtered)} tweets available with the criteria")
+
+import re
+import pandas as pd
+
+# Function to preprocess and clean text (tweets)
+def clean(text):
+    if pd.isna(text):  # Return empty string if input is NaN
+        return ""
+    
+    # Remove URLs
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+    
+    # Remove user mentions (@username) and hashtags (#tag)
+    text = re.sub(r'[@#]\w+', '', text)
+    
+    # Remove special characters and digits, keep only letters and spaces
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    
+    # Remove extra whitespace
+    text = ' '.join(text.split())
+    
+    return text.strip()
+
+# Apply text cleaning
+tweet_df['cleaned_text'] = tweet_df['tweets'].apply(clean)
+
+# Remove empty tweets after cleaning
+tweet_df = tweet_df[tweet_df['cleaned_text'] != ''].reset_index(drop=True)
+tweet_df
+cleaned_df = tweet_df[['user_location', 'cleaned_text', 'user_verified', 'user_followers']].copy()
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+import time
+# Initialize geocoder
+geolocator = Nominatim(user_agent="sentimental_analysis")
+from tqdm import tqdm
+import time
+
+# Function to geocode a user location safely
+def geocode_location(user_location):
+    """
+    Returns the latitude and longitude for a given location string.
+    If geocoding fails or location not found, returns (None, None).
+    """
+    try:
+        time.sleep(1)  # Prevent rate-limiting
+        location = geolocator.geocode(user_location, timeout=10)
+        if location:
+            return location.latitude, location.longitude
+        return None, None
+    except Exception:
+        return None, None
+
+# Get all unique user locations
+unique_locations = cleaned_df['user_location'].dropna().unique()
+print(f"Geocoding {len(unique_locations)} unique locations...")
+
+# Initialize cache dictionary
+location_cache = {}
+
+# Loop through locations with a progress bar
+for loc in tqdm(unique_locations, desc="Geocoding"):
+    location_cache[loc] = geocode_location(loc)
+
+print("Geocoding complete!")
+# Apply cached results
+cleaned_df['coords'] = cleaned_df['user_location'].map(location_cache)
+cleaned_df['latitude'] = cleaned_df['coords'].apply(lambda x: x[0] if x else None)
+cleaned_df['longitude'] = cleaned_df['coords'].apply(lambda x: x[1] if x else None)
+geocoded_df = cleaned_df.dropna(subset=['latitude', 'longitude']).reset_index(drop=True)
+import folium
+from folium import plugins
+# Calculate polarity for each tweet
+def get_polarity(text):
+    return TextBlob(text).sentiment.polarity
+
+geocoded_df['polarity'] = geocoded_df['cleaned_text'].apply(get_polarity)
+# Group by location and calculate average polarity
+polarity = geocoded_df.groupby(['latitude', 'longitude']).agg({
+    'polarity': 'mean',
+    'user_location': 'first',
+    'cleaned_text': 'count'
+}).rename(columns={'cleaned_text': 'tweet_count'}).reset_index()
+# Create polarity visualization map
+def polarity_map(data):
+    # Center map on mean coordinates
+    lat = data['latitude'].mean()
+    lon = data['longitude'].mean()
+    
+    m = folium.Map(user_location=[lat, lon], zoom_start=2)
+    
+    # Add markers with color based on polarity
+    for idx, row in data.iterrows():
+        # Color based on polarity: red (negative), yellow (neutral), green (positive)
+        if row['polarity'] > 0.1:
+            color = 'green'
+        elif row['polarity'] < -0.1:
+            color = 'red'
+        else:
+            color = 'yellow'
+        
+        folium.CircleMarker(
+            location=[row['latitude'], row['longitude']],
+            radius=8,
+            popup=f"Location: {row['user_location']}<br>Polarity: {row['polarity']:.3f}<br>Tweets: {row['tweet_count']}",
+            color=color,
+            fill=True,
+            fillColor=color,
+            fillOpacity=0.7
+        ).add_to(m)
+    
+    return m
+
+import matplotlib.pyplot as plt
+
+# Create scatter plot of geocoded tweets with polarity
+plt.figure(figsize=(12, 8))
+
+scatter = plt.scatter(
+    geocoded_df['longitude'], 
+    geocoded_df['latitude'], 
+    c=geocoded_df['polarity'],    # Color based on polarity
+    cmap='coolwarm',              # Attractive color map
+    s=120,                        # Bubble size
+    alpha=0.8,                    # Transparency
+    edgecolors='black'            # Bubble borders
+)
+
+# Add colorbar
+plt.colorbar(scatter, label='Polarity')
+
+# Add labels and title
+plt.xlabel('Longitude', fontsize=12)
+plt.ylabel('Latitude', fontsize=12)
+plt.title('Geospatial Distribution of Tweet Polarity', fontsize=16)
+
+# Add grid
+plt.grid(True, alpha=0.3)
+
+# Display plot
+plt.show()
+
+# Display polarity statistics
+print("Polarity statistics:")
+print(geocoded_df['polarity'].describe())
+# Calculate subjectivity for each tweet
+def subjectivity(text):
+    return TextBlob(text).sentiment.subjectivity
+
+geocoded_df['subjectivity'] = geocoded_df['cleaned_text'].apply(subjectivity)
+
+# Group by location and calculate average subjectivity
+loc_subjectivity = geocoded_df.groupby(['latitude', 'longitude']).agg({
+    'subjectivity': 'mean',
+    'user_location': 'first',
+    'cleaned_text': 'count'
+}).rename(columns={'cleaned_text': 'tweet_count'}).reset_index()
+# Create subjectivity visualization map
+def subjectivity_map(data):
+    lat = data['latitude'].mean()
+    lon = data['longitude'].mean()
+    
+    m = folium.Map(user_location=[lat, lon], zoom_start=2)
+    
+    # Add markers with color based on subjectivity
+    for idx, row in data.iterrows():
+        # Color based on subjectivity: blue (objective), red (subjective)
+        if row['subjectivity'] > 0.6:
+            color = 'red'
+        elif row['subjectivity'] > 0.3:
+            color = 'orange'
+        else:
+            color = 'blue'
+        
+        folium.CircleMarker(
+            location=[row['latitude'], row['longitude']],
+            radius=8,
+            popup=f"Location: {row['user_location']}<br>Subjectivity: {row['subjectivity']:.3f}<br>Tweets: {row['tweet_count']}",
+            color=color,
+            fill=True,
+            fillColor=color,
+            fillOpacity=0.7
+        ).add_to(m)
+    
+    return m
+import matplotlib.pyplot as plt
+
+# Scatter plot of geocoded tweets by subjectivity
+plt.figure(figsize=(12, 8))
+
+scatter = plt.scatter(
+    geocoded_df['longitude'], 
+    geocoded_df['latitude'], 
+    c=geocoded_df['subjectivity'],  # Color represents subjectivity
+    cmap='viridis',                 # Attractive color map
+    s=120,                          # Slightly larger bubble size
+    alpha=0.8,                      # Transparency
+    edgecolors='black'              # Bubble borders for contrast
+)
+
+# Add colorbar
+plt.colorbar(scatter, label='Subjectivity')
+
+# Add labels and title
+plt.xlabel('Longitude', fontsize=12)
+plt.ylabel('Latitude', fontsize=12)
+plt.title('Geospatial Distribution of Tweet Subjectivity', fontsize=16)
+
+# Add grid
+plt.grid(True, alpha=0.3)  
+
+# Display plot
+plt.show()
+
+# Print statistics
+print("Subjectivity statistics:")
+print(geocoded_df['subjectivity'].describe())
